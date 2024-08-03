@@ -1,6 +1,5 @@
 package com.example.todolist;
 import android.view.View;
-import android.widget.ArrayAdapter;
 import android.widget.ListView;
 import android.content.ContentValues;
 import android.content.DialogInterface;
@@ -12,7 +11,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.EditText;
 import android.widget.TextView;
-
+import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -24,9 +23,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private TaskDbHelper mHelper;
     private ListView mTaskListView;
-    private ArrayAdapter<String> mAdapter;
-
-
+    private TaskAdapter mAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -34,26 +31,26 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         mHelper = new TaskDbHelper(this);
-        mTaskListView = (ListView) findViewById(R.id.list_todo);
+        mTaskListView = findViewById(R.id.list_todo);
         updateUI();
     }
 
     private void updateUI() {
-        ArrayList<String> taskList = new ArrayList<>();
+        ArrayList<TaskItem> taskList = new ArrayList<>();
         SQLiteDatabase db = mHelper.getReadableDatabase();
         Cursor cursor = db.query(TaskContract.TaskEntry.TABLE,
-                new String[]{TaskContract.TaskEntry._ID, TaskContract.TaskEntry.COL_TASK_TITLE},
+                new String[]{TaskContract.TaskEntry._ID, TaskContract.TaskEntry.COL_TASK_TITLE, TaskContract.TaskEntry.COL_TASK_COMPLETED},
                 null, null, null, null, null);
         while (cursor.moveToNext()) {
             int idx = cursor.getColumnIndex(TaskContract.TaskEntry.COL_TASK_TITLE);
-            taskList.add(cursor.getString(idx));
+            int completedIdx = cursor.getColumnIndex(TaskContract.TaskEntry.COL_TASK_COMPLETED);
+            String task = cursor.getString(idx);
+            boolean isCompleted = cursor.getInt(completedIdx) == 1;
+            taskList.add(new TaskItem(task, isCompleted));
         }
 
         if (mAdapter == null) {
-            mAdapter = new ArrayAdapter<>(this,
-                    R.layout.item_todo,
-                    R.id.task_title,
-                    taskList);
+            mAdapter = new TaskAdapter(this, taskList);
             mTaskListView.setAdapter(mAdapter);
         } else {
             mAdapter.clear();
@@ -64,7 +61,6 @@ public class MainActivity extends AppCompatActivity {
         cursor.close();
         db.close();
     }
-
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -93,19 +89,12 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton("Add", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-//                        String task = taskEditText.getText().toString();
-//                        Log.d(TAG, "Task to add: " + task);
-                        String task = String.valueOf(taskEditText.getText());
-                        SQLiteDatabase db = mHelper.getWritableDatabase();
-                        ContentValues values = new ContentValues();
-                        values.put(TaskContract.TaskEntry.COL_TASK_TITLE, task);
-                        db.insertWithOnConflict(TaskContract.TaskEntry.TABLE,
-                                null,
-                                values,
-                                SQLiteDatabase.CONFLICT_REPLACE);
-                        db.close();
-                        updateUI();
-
+                        String task = taskEditText.getText().toString();
+                        if (task.trim().isEmpty()) {
+                            Toast.makeText(MainActivity.this, "Task cannot be empty", Toast.LENGTH_SHORT).show();
+                        } else {
+                            addTaskToDatabase(task, "", false);
+                        }
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -114,16 +103,66 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    public void deleteTask(View view) {
-        View parent = (View) view.getParent();
-        TextView taskTextView = (TextView) parent.findViewById(R.id.task_title);
-        String task = String.valueOf(taskTextView.getText());
-        SQLiteDatabase db = mHelper.getWritableDatabase();
-        db.delete(TaskContract.TaskEntry.TABLE,
-                TaskContract.TaskEntry.COL_TASK_TITLE + " = ?",
-                new String[]{task});
-        db.close();
-        updateUI();
+    private void addTaskToDatabase(String title, String description, boolean completed) {
+        SQLiteDatabase db = null;
+        try {
+            db = mHelper.getWritableDatabase();
+            ContentValues values = new ContentValues();
+            values.put(TaskContract.TaskEntry.COL_TASK_TITLE, title);
+            values.put(TaskContract.TaskEntry.COL_TASK_DESCRIPTION, description);
+            values.put(TaskContract.TaskEntry.COL_TASK_COMPLETED, completed ? 1 : 0);
+            db.insertWithOnConflict(TaskContract.TaskEntry.TABLE, null, values, SQLiteDatabase.CONFLICT_REPLACE);
+            Toast.makeText(MainActivity.this, "Task added", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.e(TAG, "Error while trying to add task to database", e);
+            Toast.makeText(MainActivity.this, "Error adding task", Toast.LENGTH_SHORT).show();
+        } finally {
+            if (db != null) {
+                db.close();
+            }
+            updateUI();
+        }
     }
 
+    public void deleteTask(View view) {
+        View parent = (View) view.getParent();
+        TextView taskTextView = parent.findViewById(R.id.task_title);
+        String task = taskTextView.getText().toString().replace("[Completed] ", "");
+        SQLiteDatabase db = null;
+        try {
+            db = mHelper.getWritableDatabase();
+            db.delete(TaskContract.TaskEntry.TABLE, TaskContract.TaskEntry.COL_TASK_TITLE + " = ?", new String[]{task});
+            Toast.makeText(MainActivity.this, "Task deleted", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.e(TAG, "Error while trying to delete task from database", e);
+            Toast.makeText(MainActivity.this, "Error deleting task", Toast.LENGTH_SHORT).show();
+        } finally {
+            if (db != null) {
+                db.close();
+            }
+            updateUI();
+        }
+    }
+
+    public void markTaskCompleted(View view) {
+        View parent = (View) view.getParent();
+        TextView taskTextView = parent.findViewById(R.id.task_title);
+        String task = taskTextView.getText().toString().replace("[Completed] ", "");
+        SQLiteDatabase db = null;
+        try {
+            db = mHelper.getWritableDatabase();
+            ContentValues values = new ContentValues();
+            values.put(TaskContract.TaskEntry.COL_TASK_COMPLETED, 1);
+            db.update(TaskContract.TaskEntry.TABLE, values, TaskContract.TaskEntry.COL_TASK_TITLE + " = ?", new String[]{task});
+            Toast.makeText(MainActivity.this, "Task marked as completed", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.e(TAG, "Error while trying to mark task as completed in database", e);
+            Toast.makeText(MainActivity.this, "Error marking task as completed", Toast.LENGTH_SHORT).show();
+        } finally {
+            if (db != null) {
+                db.close();
+            }
+            updateUI();
+        }
+    }
 }
